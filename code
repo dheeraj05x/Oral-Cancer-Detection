@@ -1,0 +1,114 @@
+import os
+import cv2
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+import keras_tuner as kt
+import shutil
+
+# Print the current working directory
+print(f"Current working directory: {os.getcwd()}")
+
+# Path to the tuner directory
+tuner_dir = r'C:\\Users\\asqua\\Desktop\\Anisha\\5th_Sem\\MiniProject\\my_dir'
+
+# Remove the existing tuner directory if it exists
+if os.path.exists(tuner_dir):
+    shutil.rmtree(tuner_dir)
+
+# Ensure the directory is created
+if not os.path.exists(tuner_dir):
+    os.makedirs(tuner_dir)
+    print(f"Created directory: {tuner_dir}")
+
+# Load and preprocess the data
+def load_data(data_dir):
+    images = []
+    labels = []
+    for label in os.listdir(data_dir):
+        class_dir = os.path.join(data_dir, label)
+        for img_name in os.listdir(class_dir):
+            img_path = os.path.join(class_dir, img_name)
+            img = cv2.imread(img_path)
+            img = cv2.resize(img, (128, 128))
+            images.append(img)
+            labels.append(label)
+    return np.array(images), np.array(labels)
+
+# Path to your dataset
+data_dir = r'C:\\Users\\asqua\\Desktop\\Anisha\\5th_Sem\\MiniProject\\Oral Cancer Dataset'
+
+# Load dataset
+images, labels = load_data(data_dir)
+
+# Encode labels
+le = LabelEncoder()
+labels = le.fit_transform(labels)
+
+# Normalize images
+images = images / 255.0
+
+# Split the dataset into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(images, labels, test_size=0.2, random_state=42)
+
+# Define the model creation function for hyperparameter tuning
+def build_model(hp):
+    model = Sequential()
+    model.add(tf.keras.Input(shape=(128, 128, 3)))
+    model.add(Conv2D(hp.Choice('conv_1_filters', [32, 64]), (3, 3), activation='relu'))
+    model.add(MaxPooling2D((2, 2)))
+    model.add(Dropout(0.25))
+    model.add(Conv2D(hp.Choice('conv_2_filters', [64, 128]), (3, 3), activation='relu'))
+    model.add(MaxPooling2D((2, 2)))
+    model.add(Dropout(0.25))
+    model.add(Flatten())
+    model.add(Dense(hp.Choice('dense_units', [128, 256]), activation='relu'))
+    model.add(Dropout(0.5))
+    model.add(Dense(1, activation='sigmoid'))
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
+
+# Combine Hyperband settings with reduced epochs and increased factor
+tuner = kt.Hyperband(
+    build_model,
+    objective='val_accuracy',
+    max_epochs=5,
+    factor=4,
+    directory=tuner_dir,
+    project_name='oral_cancer_tuning'
+)
+
+# Perform hyperparameter tuning
+tuner.search(X_train, y_train, epochs=10, validation_data=(X_test, y_test))
+
+# Get the best model
+best_model = tuner.get_best_models(num_models=1)[0]
+
+# Evaluate the best model
+loss, accuracy = best_model.evaluate(X_test, y_test)
+print(f"Test accuracy: {accuracy}")
+
+# Save the best model
+best_model.save('best_oral_cancer_detector.keras')
+
+# Predict on new images
+def predict_image(image_path, threshold=0.75):
+    if not os.path.isfile(image_path):
+        return f"File not found: {image_path}"
+    
+    img = cv2.imread(image_path)
+    if img is None:
+        return f"Failed to read image: {image_path}"
+    
+    img = cv2.resize(img, (128, 128))
+    img = img / 255.0
+    img = np.expand_dims(img, axis=0)  # Add batch dimension
+    prediction = best_model.predict(img)
+    return "Cancer" if prediction < threshold else "No Cancer"
+
+# Example usage with adjusted threshold
+example_image_path = r'C:\\Users\\asqua\\Desktop\\Anisha\\5th_Sem\\MiniProject\\Oral Cancer Dataset\\NON CANCER\\005.jpeg'
+print(predict_image(example_image_path, threshold=0.75))
